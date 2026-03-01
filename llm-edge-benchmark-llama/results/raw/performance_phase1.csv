@@ -1,0 +1,2 @@
+timestamp,model_name,pp512_mean,pp512_std,tg128_mean,tg128_std,peak_rss_kb,peak_rss_mib,wall_clock,cpu_percent
+2025-01-01T00:00:00,Llama 3.2 3B Q4_K_M,110.43,0.36,19.22,0.14,2164808,2114.1,1:05.60,1125%
