@@ -1,2 +1,0 @@
-timestamp,model_name,ctx_size,ppl,ppl_uncertainty,chunks,load_time_ms,prompt_eval_tps
-2025-01-01T00:00:00,Llama 3.2 3B Q4_K_M,512,12.3250,0.51183,18,3121.88,134.25

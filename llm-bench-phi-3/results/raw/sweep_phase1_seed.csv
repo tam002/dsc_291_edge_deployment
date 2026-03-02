@@ -1,2 +1,0 @@
-timestamp,model,quant,size_gib,pp_tps,pp_std,tg_tps,tg_std,peak_ram_mib,ppl,ppl_unc,chunks,tokens_per_joule
-2025-01-01T00:00:00,Phi-3 Mini 3.82B Instruct,Q4_K_M,2.23,72.66,1.05,15.95,0.33,2578.1,6.8152,0.24572,21,

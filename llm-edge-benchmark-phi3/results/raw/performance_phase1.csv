@@ -1,2 +1,0 @@
-timestamp,model_name,pp512_mean,pp512_std,tg128_mean,tg128_std,peak_rss_kb,peak_rss_mib,wall_clock,cpu_percent
-2025-01-01T00:00:00,Phi-3 Mini 3.82B Q4_K_M,72.66,1.05,15.95,0.33,2639740,2578.1,1:30.67,1141%

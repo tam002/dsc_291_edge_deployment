@@ -1,2 +1,0 @@
-timestamp,model_name,ctx_size,ppl,ppl_uncertainty,chunks,load_time_ms,prompt_eval_tps
-2025-01-01T00:00:00,Phi-3 Mini 3.82B Q4_K_M,512,6.8152,0.24572,21,3877.85,93.87
