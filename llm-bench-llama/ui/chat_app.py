@@ -53,12 +53,14 @@ def get_peak_ram_mib():
 
 
 def load_sweep_results():
-    """Load latest sweep CSV if present."""
-    files = sorted(glob.glob("results/raw/sweep_*.csv"), reverse=True)
+    """Load latest sweep CSV if present. Uses path relative to this file's location."""
+    # Use __file__ so this works regardless of which directory the user runs from
+    base     = Path(__file__).parent.parent  # ui/ -> project root
+    pattern  = str(base / "results" / "raw" / "sweep_*.csv")
+    files    = sorted(glob.glob(pattern), reverse=True)
     if not files:
         return None
-    rows = list(csv.DictReader(open(files[0])))
-    return rows
+    return list(csv.DictReader(open(files[0])))
 
 
 # ── Backend: llama.cpp ────────────────────────────────────────────────────────
@@ -90,6 +92,13 @@ def load_llamacpp(quant):
 
 
 def load_mlx_model():
+    """
+    Returns (model, tokenizer) tuple.
+    Caches both in _llm as a tuple — callers unpack with: model, tokenizer = load_mlx_model()
+    Bug fix: previously stored load() result in _llm then returned _llm, but load_mlx_model()
+    callers tried to unpack it as model, tokenizer = load_mlx_model() which would have worked
+    only if the function returned the tuple directly — which it now does explicitly.
+    """
     global _llm, _loaded_key
     try:
         from mlx_lm import load
@@ -101,9 +110,9 @@ def load_mlx_model():
 
     with _lock:
         if _loaded_key != "mlx":
-            _llm = load(MLX_DIR)
+            _llm = load(MLX_DIR)   # returns (model, tokenizer) tuple
             _loaded_key = "mlx"
-    return _llm
+    return _llm   # caller unpacks as: model, tokenizer = load_mlx_model()
 
 
 def chat_llamacpp(message, history, quant, max_tokens, temperature):
@@ -146,7 +155,12 @@ def chat_llamacpp(message, history, quant, max_tokens, temperature):
 
 
 def chat_mlx(message, history, max_tokens, temperature):
-    from mlx_lm import generate
+    """
+    MLX chat with streaming via mlx_lm's built-in stream_generate.
+    Previously used generate() and yielded only once at the end — inconsistent
+    with llama.cpp's token-by-token streaming. Now streams each token.
+    """
+    from mlx_lm import stream_generate
     model, tokenizer = load_mlx_model()
 
     messages = [{"role": "system", "content": "You are a helpful AI assistant."}]
@@ -158,20 +172,28 @@ def chat_mlx(message, history, max_tokens, temperature):
 
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-    t_start  = time.perf_counter()
-    response = generate(model, tokenizer, prompt=prompt,
-                        max_tokens=max_tokens, verbose=False)
-    elapsed  = time.perf_counter() - t_start
-    n_tok    = len(tokenizer.encode(response))
+    full_resp = ""
+    t_start   = time.perf_counter()
+    t_first   = None
+    n_tokens  = 0
 
-    yield history + [[message, response]], metrics_html({
-        "backend": "MLX (GPU/ANE)",
-        "tg_tps":  round(n_tok / elapsed, 1),
-        "tokens":  n_tok,
-        "ttft_ms": None,
-        "ram":     get_peak_ram_mib(),
-        "elapsed": elapsed,
-    })
+    for token_text in stream_generate(model, tokenizer, prompt=prompt, max_tokens=max_tokens):
+        if t_first is None:
+            t_first = time.perf_counter()
+        full_resp += token_text
+        n_tokens  += 1
+        elapsed    = time.perf_counter() - t_start
+        tg_tps     = n_tokens / elapsed if elapsed > 0 else 0
+        ttft_ms    = (t_first - t_start) * 1000 if t_first else 0
+
+        yield history + [[message, full_resp]], metrics_html({
+            "backend": "MLX (GPU/ANE)",
+            "tg_tps":  tg_tps,
+            "tokens":  n_tokens,
+            "ttft_ms": ttft_ms,
+            "ram":     get_peak_ram_mib(),
+            "elapsed": elapsed,
+        })
 
 
 # ── Metrics HTML ──────────────────────────────────────────────────────────────

@@ -75,15 +75,23 @@ def parse_bench(stdout):
     return r
 
 
-def parse_time_v(stderr):
+def parse_time_output(stderr):
+    """
+    Parse /usr/bin/time output for peak RAM.
+    macOS (BSD time -l): 'maximum resident set size' in BYTES (lowercase label).
+    Linux (GNU time -v): 'Maximum resident set size' in KB.
+    Both are matched case-insensitively here.
+    """
     r = {}
     for line in stderr.splitlines():
-        if "Maximum resident set size" in line:
+        if "maximum resident set size" in line.lower():
             m = re.search(r"(\d+)", line)
             if m:
-                r["peak_ram_kb"]  = int(m.group(1))
-                r["peak_ram_mib"] = round(int(m.group(1)) / 1024, 1)
-        if "Elapsed (wall clock)" in line:
+                raw = int(m.group(1))
+                # macOS BSD time reports bytes; Linux GNU time reports kilobytes
+                r["peak_ram_mib"] = round(raw / (1024 * 1024), 1) if sys.platform == "darwin" \
+                                    else round(raw / 1024, 1)
+        if "elapsed" in line.lower() and "wall clock" in line.lower():
             r["wall_clock"] = line.split(":")[-1].strip()
     return r
 
@@ -99,55 +107,70 @@ def parse_ppl(output):
     return r
 
 
-def run_throughput_and_ram(mpath, threads):
-    cmd = ["/usr/bin/time", "-v", LLAMA_BENCH,
-           "-m", mpath, *BENCH_ARGS, "-t", str(threads)]
+def run_throughput_ram_and_power(mpath, threads):
+    """
+    Single llama-bench pass that captures throughput, RAM, AND power simultaneously.
+    Previously these were two separate bench runs (doubled wall-clock time per quant).
+    powermetrics is started first, then the ONE bench run is measured for both
+    throughput/RAM and power.
+    """
+    time_flag  = "-l" if sys.platform == "darwin" else "-v"
+    result     = {}
+    power_log  = RESULTS_DIR / f"_pm_{int(time.time())}.txt"
+    has_power  = sys.platform == "darwin" and os.geteuid() == 0
+
+    # Start powermetrics before the bench run (Mac + sudo only)
+    pm = None
+    if has_power:
+        pm = subprocess.Popen([
+            "powermetrics", "--samplers", "cpu_power,gpu_power,ane_power",
+            "-i", "500", "--format", "text", "-o", str(power_log)
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2)  # allow powermetrics to warm up
+
+    batt_before = get_battery_mah() if has_power else None
+
+    # Single bench run — timed for power, parsed for throughput + RAM
+    t0   = time.perf_counter()
+    cmd  = ["/usr/bin/time", time_flag, LLAMA_BENCH,
+            "-m", mpath, *BENCH_ARGS, "-t", str(threads)]
     proc = subprocess.run(cmd, capture_output=True, text=True)
-    return {**parse_bench(proc.stdout), **parse_time_v(proc.stderr)}
-
-
-def run_power(mpath, threads):
-    if os.geteuid() != 0:
-        print("    [power] Skipping — needs sudo for powermetrics.")
-        return {}
-
-    power_log = RESULTS_DIR / f"_pm_{int(time.time())}.txt"
-    pm = subprocess.Popen([
-        "powermetrics", "--samplers", "cpu_power,gpu_power,ane_power",
-        "-i", "500", "--format", "text", "-o", str(power_log)
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(2)
-
-    batt_before = get_battery_mah()
-    t0 = time.perf_counter()
-    subprocess.run([LLAMA_BENCH, "-m", mpath, *BENCH_ARGS, "-t", str(threads)],
-                   capture_output=True)
     elapsed = time.perf_counter() - t0
-    batt_after = get_battery_mah()
 
-    time.sleep(1)
-    pm.terminate(); pm.wait()
+    batt_after = get_battery_mah() if has_power else None
 
-    result = {"elapsed_s": round(elapsed, 1)}
-    try:
-        log_txt = power_log.read_text()
-        pkg_vals = [float(x) for x in
-                    re.findall(r"Package Power:\s*([\d.]+)\s*mW", log_txt)]
-        if pkg_vals:
-            mean_mw = sum(pkg_vals) / len(pkg_vals)
-            result["pkg_power_mean_mw"] = round(mean_mw, 1)
-            result["pkg_power_peak_mw"] = round(max(pkg_vals), 1)
-            # tg128 × 3 runs = 384 tokens generated total
-            energy_j = mean_mw / 1000 * elapsed
-            result["tokens_per_joule"] = round(384 / energy_j, 2) if energy_j > 0 else None
-        power_log.unlink(missing_ok=True)
-    except Exception as e:
-        print(f"    [power] Parse warning: {e}")
+    if pm:
+        time.sleep(1)
+        pm.terminate(); pm.wait()
 
-    if batt_before and batt_after:
-        mah_delta = batt_before - batt_after
-        result["batt_mah_delta"] = round(mah_delta, 1)
-        result["energy_mwh"]     = round(mah_delta * BATTERY_V, 1)
+    # Throughput + RAM from this single run
+    result.update(parse_bench(proc.stdout))
+    result.update(parse_time_output(proc.stderr))
+    result["elapsed_s"] = round(elapsed, 1)
+
+    # Power from powermetrics log
+    if has_power and pm:
+        try:
+            log_txt  = power_log.read_text()
+            pkg_vals = [float(x) for x in
+                        re.findall(r"Package Power:\s*([\d.]+)\s*mW", log_txt)]
+            if pkg_vals:
+                mean_mw = sum(pkg_vals) / len(pkg_vals)
+                result["pkg_power_mean_mw"] = round(mean_mw, 1)
+                result["pkg_power_peak_mw"] = round(max(pkg_vals), 1)
+                # tg128 × 3 runs = 384 generation tokens total
+                energy_j = mean_mw / 1000 * elapsed
+                result["tokens_per_joule"] = round(384 / energy_j, 2) if energy_j > 0 else None
+            power_log.unlink(missing_ok=True)
+        except Exception as e:
+            print(f"    [power] Parse warning: {e}")
+
+        if batt_before and batt_after:
+            mah_delta = batt_before - batt_after
+            result["batt_mah_delta"] = round(mah_delta, 1)
+            result["energy_mwh"]     = round(mah_delta * BATTERY_V, 1)
+    elif sys.platform == "darwin" and os.geteuid() != 0:
+        print("    [power] Skipping — run with sudo to enable powermetrics.")
 
     return result
 
@@ -166,12 +189,13 @@ def main():
     parser.add_argument("--threads",  type=int, default=8)
     args = parser.parse_args()
 
-    is_mac = sys.platform == "darwin"
+    is_mac      = sys.platform == "darwin"
+    has_power   = is_mac and os.geteuid() == 0
     print(f"\n{'='*60}")
     print(f"  Quantisation Sweep — {MODEL_NAME}")
     print(f"  Levels : {', '.join(args.quants)}")
     print(f"  Threads: {args.threads}  |  PPL: {'off' if args.skip_ppl else 'on'}")
-    print(f"  Power  : {'on (sudo detected)' if os.geteuid()==0 else 'off (run with sudo)'}")
+    print(f"  Power  : {'on (sudo + Mac)' if has_power else 'off (needs sudo on Mac)'}")
     print(f"{'='*60}\n")
 
     all_results = []
@@ -191,14 +215,10 @@ def main():
             "model": MODEL_NAME, "quant": quant, "size_gib": size_gib,
         }
 
-        print("  Throughput + RAM...", end=" ", flush=True)
-        row.update(run_throughput_and_ram(mpath, args.threads))
+        # Single bench pass — captures throughput, RAM, and power together
+        print("  Throughput + RAM + Power...", end=" ", flush=True)
+        row.update(run_throughput_ram_and_power(mpath, args.threads))
         print("done")
-
-        if is_mac:
-            print("  Power...", end=" ", flush=True)
-            row.update(run_power(mpath, args.threads))
-            print("done")
 
         if not args.skip_ppl:
             print("  Perplexity...", end=" ", flush=True)
@@ -206,10 +226,19 @@ def main():
             print("done")
 
         all_results.append(row)
-        print(f"  pp={row.get('pp_tps','?')} tg={row.get('tg_tps','?')} "
-              f"RAM={row.get('peak_ram_mib','?')}MiB "
-              f"PPL={row.get('ppl','?')} "
-              f"tok/J={row.get('tokens_per_joule','?')}")
+
+        # Clear per-quant summary with pp and tg on separate lines
+        print(f"\n  ┌─ {quant} results ───────────────────────────")
+        print(f"  │  Prefill  (pp): {str(row.get('pp_tps', '—')):>8} ± {str(row.get('pp_std', '—'))} t/s")
+        print(f"  │  Generate (tg): {str(row.get('tg_tps', '—')):>8} ± {str(row.get('tg_std', '—'))} t/s")
+        print(f"  │  Peak RAM     : {str(row.get('peak_ram_mib', '—')):>8} MiB")
+        if row.get("pkg_power_mean_mw"):
+            print(f"  │  Pkg power    : {row['pkg_power_mean_mw']:>8.1f} mW (mean)")
+        if row.get("tokens_per_joule"):
+            print(f"  │  tok / joule  : {row['tokens_per_joule']:>8.2f}")
+        if row.get("ppl"):
+            print(f"  │  Perplexity   : {row['ppl']:>8.4f} ± {row['ppl_unc']:.5f}")
+        print(f"  └────────────────────────────────────────────")
 
     if not all_results:
         print("No results. Download models first: bash models/download_models.sh")

@@ -1,2 +1,0 @@
-timestamp,model,quant,size_gib,pp_tps,pp_std,tg_tps,tg_std,peak_ram_mib,ppl,ppl_unc,chunks,tokens_per_joule
-2025-01-01T00:00:00,Llama 3.2 3B Instruct,Q4_K_M,1.87,110.43,0.36,19.22,0.14,2114.1,12.3250,0.51183,18,

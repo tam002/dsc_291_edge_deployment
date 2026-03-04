@@ -25,7 +25,6 @@ from pathlib import Path
 try:
     import mlx.core as mx
     from mlx_lm import load, generate
-    from mlx_lm.utils import load as load_model
 except ImportError:
     print("ERROR: MLX not installed. Run: pip install mlx mlx-lm")
     sys.exit(1)
@@ -37,9 +36,40 @@ RESULTS_DIR = Path("results/raw")
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 BATTERY_V   = 11.4
 
-PROMPT_512  = "The history of artificial intelligence spans many decades, " * 30
+WIKI_RAW    = os.path.expanduser("~/wiki.test.raw")
+N_PREFILL   = 512   # tokens to use as prefill prompt
 N_GENERATE  = 128
 N_RUNS      = 3
+
+
+def load_wiki_prompt(tokenizer) -> str:
+    """
+    Build a ~512-token prefill prompt from WikiText-2 — the same corpus used
+    by run_sweep.py for perplexity scoring. Using a shared real-text corpus
+    makes prefill results directly comparable across llama.cpp and MLX, and
+    avoids the artificial compressibility of a repeated synthetic sentence.
+    """
+    if not Path(WIKI_RAW).exists():
+        print(f"  [warn] WikiText-2 not found at {WIKI_RAW}.")
+        print(f"         Download it per the README, or prefill will use a fallback prompt.")
+        return "The history of artificial intelligence spans many decades. " * 30
+
+    # Read lines until we have at least N_PREFILL tokens
+    text   = ""
+    tokens = []
+    with open(WIKI_RAW) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("="):   # skip headers
+                continue
+            text   += " " + line
+            tokens  = tokenizer.encode(text)
+            if len(tokens) >= N_PREFILL:
+                break
+
+    # Decode exactly N_PREFILL tokens so the count is deterministic
+    prompt = tokenizer.decode(tokens[:N_PREFILL])
+    return prompt
 
 
 def get_peak_ram_mib():
@@ -79,18 +109,21 @@ def parse_power_log(log_path):
 
 
 def benchmark_prefill(model, tokenizer):
-    """Measure prompt processing speed (tokens/sec)."""
-    tokens = tokenizer.encode(PROMPT_512)
-    n_tokens = len(tokens)
-
-    times = []
+    """
+    Measure prompt-processing speed (tokens/sec) — prefill phase only.
+    Prompt is sourced from WikiText-2 (same corpus as PPL in run_sweep.py)
+    for a fair, reproducible comparison with llama.cpp prefill numbers.
+    Uses generate(..., max_tokens=1) so nearly all elapsed time is prefill.
+    """
+    prompt   = load_wiki_prompt(tokenizer)
+    n_tokens = len(tokenizer.encode(prompt))
+    times    = []
     for _ in range(N_RUNS):
         t0 = time.perf_counter()
-        _ = model(mx.array([tokens]))
-        mx.eval()
+        generate(model, tokenizer, prompt=prompt, max_tokens=1, verbose=False)
         times.append(time.perf_counter() - t0)
-
     mean_t = sum(times) / len(times)
+    print(f"\n    Prefill prompt: {n_tokens} tokens from WikiText-2")
     return round(n_tokens / mean_t, 2), n_tokens
 
 
@@ -176,17 +209,22 @@ def main():
         }
 
     result = {
-        "timestamp":     datetime.now().isoformat(),
-        "framework":     "MLX",
-        "model":         MODEL_NAME,
-        "mlx_repo":      MLX_REPO,
-        "load_time_ms":  load_time_ms,
-        "peak_ram_mib":  peak_ram,
-        "pp_tps":        pp_tps,
-        "tg_tps":        tg_tps,
-        "elapsed_s":     round(bench_elapsed, 1),
-        **power_data,
-        **batt_data,
+        "timestamp":          datetime.now().isoformat(),
+        "framework":          "MLX",
+        "model":              MODEL_NAME,
+        "quant":              "4bit",        # MLX model is 4-bit quantised
+        "mlx_repo":           MLX_REPO,
+        "load_time_ms":       load_time_ms,
+        "peak_ram_mib":       peak_ram,
+        "pp_tps":             pp_tps,
+        "tg_tps":             tg_tps,
+        "elapsed_s":          round(bench_elapsed, 1),
+        # Power fields use same names as run_sweep.py for notebook compatibility
+        "pkg_power_mean_mw":  power_data.get("pkg_mean_mw"),
+        "pkg_power_peak_mw":  power_data.get("pkg_peak_mw"),
+        "tokens_per_joule":   power_data.get("tokens_per_joule"),
+        "batt_mah_delta":     batt_data.get("batt_mah_delta"),
+        "energy_mwh":         batt_data.get("energy_mwh"),
     }
 
     ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
