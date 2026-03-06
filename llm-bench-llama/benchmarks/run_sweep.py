@@ -12,11 +12,13 @@ Usage:
 
 import argparse
 import csv
+import json
 import os
 import re
 import subprocess
 import sys
 import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -25,16 +27,19 @@ MODEL_DIR   = os.path.expanduser("~/models/llama3.2_3b")
 PREFIX      = "Llama-3.2-3B-Instruct"
 LLAMA_BENCH = "./llama-bench"
 LLAMA_PPL   = "./llama-perplexity"
+LLAMA_CLI   = "./llama-cli"
 WIKI_RAW    = os.path.expanduser("~/wiki.test.raw")
 WIKI_SMALL  = os.path.expanduser("~/wiki.test.small.raw")
 RESULTS_DIR = Path("results/raw")
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-ALL_QUANTS  = ["Q2_K", "Q3_K_M", "Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0"]
+ALL_QUANTS  = ["Q3_K_L", "Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0"]
 BENCH_ARGS  = ["-p", "512", "-n", "128", "-r", "3"]
 CTX_SIZE    = 512
-WIKI_LINES  = 200
-BATTERY_V   = 11.4  # M1 MacBook nominal voltage
+WIKI_LINES   = 200
+BATTERY_V    = 11.4  # M1 MacBook nominal voltage
+GSM8K_CACHE  = os.path.expanduser("~/gsm8k_test_100.json")
+GSM8K_N      = 100
 
 
 def model_path(quant):
@@ -48,15 +53,6 @@ def prepare_corpus():
     open(WIKI_SMALL, "w").writelines(open(WIKI_RAW).readlines()[:WIKI_LINES])
     return WIKI_SMALL
 
-
-def get_battery_mah():
-    try:
-        out = subprocess.check_output(
-            ["system_profiler", "SPPowerDataType"], text=True, stderr=subprocess.DEVNULL)
-        m = re.search(r"Current Capacity[^:]*:\s*([\d]+)", out)
-        return float(m.group(1)) if m else None
-    except Exception:
-        return None
 
 
 def parse_bench(stdout):
@@ -121,14 +117,15 @@ def run_throughput_ram_and_power(mpath, threads):
 
     # Start powermetrics before the bench run (Mac + sudo only)
     pm = None
+    print(f"    [power] has_power={has_power}, euid={os.geteuid()}, platform={sys.platform}")
     if has_power:
         pm = subprocess.Popen([
             "powermetrics", "--samplers", "cpu_power,gpu_power,ane_power",
             "-i", "500", "--format", "text", "-o", str(power_log)
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         time.sleep(2)  # allow powermetrics to warm up
+        print(f"    [power] powermetrics pid={pm.pid}, returncode={pm.returncode} (None=still running)")
 
-    batt_before = get_battery_mah() if has_power else None
 
     # Single bench run — timed for power, parsed for throughput + RAM
     t0   = time.perf_counter()
@@ -137,11 +134,13 @@ def run_throughput_ram_and_power(mpath, threads):
     proc = subprocess.run(cmd, capture_output=True, text=True)
     elapsed = time.perf_counter() - t0
 
-    batt_after = get_battery_mah() if has_power else None
-
     if pm:
         time.sleep(1)
-        pm.terminate(); pm.wait()
+        pm.terminate()
+        _, pm_stderr = pm.communicate()
+        print(f"    [power] powermetrics exit code={pm.returncode}")
+        if pm_stderr:
+            print(f"    [power] powermetrics stderr: {pm_stderr.decode(errors='replace')[:500]}")
 
     # Throughput + RAM from this single run
     result.update(parse_bench(proc.stdout))
@@ -152,23 +151,45 @@ def run_throughput_ram_and_power(mpath, threads):
     if has_power and pm:
         try:
             log_txt  = power_log.read_text()
+            print(f"    [power] log size={len(log_txt)} bytes")
+            power_lines = [l for l in log_txt.splitlines()
+                           if re.search(r"power|watt|mW", l, re.IGNORECASE)]
+            print(f"    [power] power-related lines ({len(power_lines)} total), first 20:")
+            for l in power_lines[:20]:
+                print(f"      {l}")
+
+            # Try "Package Power" (Intel), then "Combined Power" (Apple Silicon)
             pkg_vals = [float(x) for x in
                         re.findall(r"Package Power:\s*([\d.]+)\s*mW", log_txt)]
+            if not pkg_vals:
+                pkg_vals = [float(x) for x in
+                            re.findall(r"Combined Power \(CPU \+ GPU \+ ANE\):\s*([\d.]+)\s*mW", log_txt)]
+            # Final fallback: sum CPU + GPU + ANE per sample
+            if not pkg_vals:
+                cpu_vals = [float(x) for x in re.findall(r"CPU Power:\s*([\d.]+)\s*mW", log_txt)]
+                gpu_vals = [float(x) for x in re.findall(r"GPU Power:\s*([\d.]+)\s*mW", log_txt)]
+                ane_vals = [float(x) for x in re.findall(r"ANE Power:\s*([\d.]+)\s*mW", log_txt)]
+                if cpu_vals:
+                    n = min(len(cpu_vals), len(gpu_vals) or len(cpu_vals), len(ane_vals) or len(cpu_vals))
+                    pkg_vals = [
+                        (cpu_vals[i] if i < len(cpu_vals) else 0) +
+                        (gpu_vals[i] if i < len(gpu_vals) else 0) +
+                        (ane_vals[i] if i < len(ane_vals) else 0)
+                        for i in range(n)
+                    ]
+            print(f"    [power] pkg_vals found: {pkg_vals[:5]}")
             if pkg_vals:
                 mean_mw = sum(pkg_vals) / len(pkg_vals)
                 result["pkg_power_mean_mw"] = round(mean_mw, 1)
                 result["pkg_power_peak_mw"] = round(max(pkg_vals), 1)
-                # tg128 × 3 runs = 384 generation tokens total
-                energy_j = mean_mw / 1000 * elapsed
-                result["tokens_per_joule"] = round(384 / energy_j, 2) if energy_j > 0 else None
+                avg_watts = mean_mw / 1000
+                result["avg_watts"] = round(avg_watts, 3)
+                tg_tps = result.get("tg_tps")
+                result["tokens_per_joule"] = round(tg_tps / avg_watts, 2) if (tg_tps and avg_watts > 0) else None
             power_log.unlink(missing_ok=True)
         except Exception as e:
             print(f"    [power] Parse warning: {e}")
 
-        if batt_before and batt_after:
-            mah_delta = batt_before - batt_after
-            result["batt_mah_delta"] = round(mah_delta, 1)
-            result["energy_mwh"]     = round(mah_delta * BATTERY_V, 1)
     elif sys.platform == "darwin" and os.geteuid() != 0:
         print("    [power] Skipping — run with sudo to enable powermetrics.")
 
@@ -182,11 +203,63 @@ def run_perplexity(mpath):
     return parse_ppl(proc.stdout + proc.stderr)
 
 
+def load_gsm8k():
+    if Path(GSM8K_CACHE).exists():
+        with open(GSM8K_CACHE) as f:
+            return json.load(f)
+    print(f"  [gsm8k] Downloading {GSM8K_N} questions from HuggingFace...", end=" ", flush=True)
+    url = (
+        f"https://datasets-server.huggingface.co/rows"
+        f"?dataset=openai%2Fgsm8k&config=main&split=test&offset=0&limit={GSM8K_N}"
+    )
+    with urllib.request.urlopen(url, timeout=30) as resp:
+        data = json.loads(resp.read())
+    rows = [{"question": r["row"]["question"], "answer": r["row"]["answer"]}
+            for r in data["rows"]]
+    with open(GSM8K_CACHE, "w") as f:
+        json.dump(rows, f)
+    print("done")
+    return rows
+
+
+def extract_gsm8k_answer(text):
+    """Return the number after the last '####' in text, or None."""
+    matches = re.findall(r"####\s*([\d,.\-]+)", text)
+    if matches:
+        return matches[-1].replace(",", "").strip()
+    return None
+
+
+def run_gsm8k(mpath, threads):
+    questions = load_gsm8k()
+    correct = 0
+    for q in questions:
+        prompt = (
+            "Solve this math problem step by step. "
+            "Put your final answer as a number after ####.\n\n"
+            f"Question: {q['question']}\n\nAnswer:"
+        )
+        cmd = [
+            LLAMA_CLI, "-m", mpath, "-t", str(threads),
+            "-n", "200", "--temp", "0", "--log-disable", "-p", prompt,
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            pred = extract_gsm8k_answer(proc.stdout)
+            gt   = extract_gsm8k_answer(q["answer"])
+            if pred is not None and gt is not None and pred == gt:
+                correct += 1
+        except subprocess.TimeoutExpired:
+            pass
+    return {"gsm8k_acc": round(100 * correct / len(questions), 1)}
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--quants",   nargs="+", default=ALL_QUANTS)
-    parser.add_argument("--skip-ppl", action="store_true")
-    parser.add_argument("--threads",  type=int, default=8)
+    parser.add_argument("--quants",    nargs="+", default=ALL_QUANTS)
+    parser.add_argument("--skip-ppl",  action="store_true")
+    parser.add_argument("--skip-gsm8k", action="store_true")
+    parser.add_argument("--threads",   type=int, default=8)
     args = parser.parse_args()
 
     is_mac      = sys.platform == "darwin"
@@ -194,7 +267,7 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Quantisation Sweep — {MODEL_NAME}")
     print(f"  Levels : {', '.join(args.quants)}")
-    print(f"  Threads: {args.threads}  |  PPL: {'off' if args.skip_ppl else 'on'}")
+    print(f"  Threads: {args.threads}  |  PPL: {'off' if args.skip_ppl else 'on'}  |  GSM8K: {'off' if args.skip_gsm8k else 'on'}")
     print(f"  Power  : {'on (sudo + Mac)' if has_power else 'off (needs sudo on Mac)'}")
     print(f"{'='*60}\n")
 
@@ -213,6 +286,7 @@ def main():
         row = {
             "timestamp": datetime.now().isoformat(),
             "model": MODEL_NAME, "quant": quant, "size_gib": size_gib,
+            "avg_watts": None, "tokens_per_joule": None, "gsm8k_acc": None,
         }
 
         # Single bench pass — captures throughput, RAM, and power together
@@ -223,6 +297,11 @@ def main():
         if not args.skip_ppl:
             print("  Perplexity...", end=" ", flush=True)
             row.update(run_perplexity(mpath))
+            print("done")
+
+        if not args.skip_gsm8k:
+            print(f"  GSM8K ({GSM8K_N} questions)...", end=" ", flush=True)
+            row.update(run_gsm8k(mpath, args.threads))
             print("done")
 
         all_results.append(row)
@@ -238,6 +317,8 @@ def main():
             print(f"  │  tok / joule  : {row['tokens_per_joule']:>8.2f}")
         if row.get("ppl"):
             print(f"  │  Perplexity   : {row['ppl']:>8.4f} ± {row['ppl_unc']:.5f}")
+        if row.get("gsm8k_acc") is not None:
+            print(f"  │  GSM8K acc    : {row['gsm8k_acc']:>7.1f}%")
         print(f"  └────────────────────────────────────────────")
 
     if not all_results:
@@ -245,9 +326,17 @@ def main():
         sys.exit(1)
 
     out_path = RESULTS_DIR / f"sweep_{ts}.csv"
-    all_keys = list(dict.fromkeys(k for r in all_results for k in r))
+    fieldnames = [
+        "timestamp", "model", "quant", "size_gib",
+        "pp_tps", "pp_std", "tg_tps", "tg_std",
+        "peak_ram_mib", "elapsed_s",
+        "avg_watts", "tokens_per_joule",
+        "pkg_power_mean_mw", "pkg_power_peak_mw",
+        "ppl", "ppl_unc", "chunks",
+        "gsm8k_acc",
+    ]
     with open(out_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=all_keys, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(all_results)
 

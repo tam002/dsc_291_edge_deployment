@@ -1,0 +1,31 @@
+# Models (downloaded, not committed)
+~/models/
+*.gguf
+
+# WikiText-2 corpus (downloaded)
+~/wiki.test.raw
+~/wiki.test.small.raw
+
+# GSM8K cache (downloaded)
+~/gsm8k_test_100.json
+
+# llama.cpp binaries (symlinked from build)
+llama-bench
+llama-cli
+llama-perplexity
+
+# Python virtualenv
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Results CSVs and plots (generated)
+results/raw/*.csv
+results/plots/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
