@@ -6,6 +6,7 @@ import requests
 import sseclient
 import json
 import psutil
+import pandas as pd
 
 MODEL_DIR = os.path.expanduser("~/models/llama3.2_3b")
 PREFIX = "Llama-3.2-3B-Instruct"
@@ -68,6 +69,24 @@ if "avg_power" not in st.session_state:
 if "tokens_per_joule" not in st.session_state:
     st.session_state.tokens_per_joule = 0
 
+if "gen_speed_history" not in st.session_state:
+    st.session_state.gen_speed_history = []
+
+if "prefill_speed_history" not in st.session_state:
+    st.session_state.prefill_speed_history = []
+
+if "token_history" not in st.session_state:
+    st.session_state.token_history = []
+    
+if "time_history" not in st.session_state:
+    st.session_state.time_history = []
+
+if "memory_history" not in st.session_state:
+    st.session_state.memory_history = []
+
+if "efficiency_history" not in st.session_state:
+    st.session_state.efficiency_history = []
+    
 # -----------------------
 # UI
 # -----------------------
@@ -119,9 +138,23 @@ with metric_right:
     power_metric = st.empty()
     efficiency_metric = st.empty()
 
-    memory_metric.metric("Peak Memory", "0 MB")
-    power_metric.metric("Power", "0 W")
-    efficiency_metric.metric("Tokens/Joule", "0")
+    memory_metric.metric("Peak Memory", f"{st.session_state.peak_memory:.1f} MB")
+    power_metric.metric("Power", f"{st.session_state.avg_power:.1f} W")
+    efficiency_metric.metric("Tokens/Joule", f"{st.session_state.tokens_per_joule:.1f}")
+
+st.markdown("### Performance Charts")
+
+st.markdown("Prefill Speed")
+prefill_chart = st.empty()
+
+st.markdown("Generation Speed")
+gen_chart = st.empty()
+
+st.markdown("Memory Usage")
+memory_chart = st.empty()
+
+st.markdown("Efficiency")
+efficiency_chart = st.empty()
 
 # -----------------------
 # Run prompt
@@ -198,6 +231,14 @@ if run_button:
                         st.session_state.avg_power = avg_watts
                         st.session_state.tokens_per_joule = tokens_per_joule
 
+                        st.session_state.gen_speed_history.append(gen_speed)
+                        st.session_state.prefill_speed_history.append(prefill_speed)
+                        st.session_state.token_history.append(token_count)
+
+                        st.session_state.time_history.append(elapsed)
+                        st.session_state.memory_history.append(memory_mb)
+                        st.session_state.efficiency_history.append(tokens_per_joule)
+
                         prefill_metric.metric("Prefill Speed", f"{prefill_speed:.1f} t/s")
                         gen_metric.metric("Generation Speed", f"{gen_speed:.1f} t/s")
                         tok_metric.metric("Tokens Generated", token_count)
@@ -205,170 +246,32 @@ if run_button:
                         power_metric.metric("Power", f"{avg_watts:.1f} W")
                         efficiency_metric.metric("Tokens/Joule", f"{tokens_per_joule:.2f}")
 
+                        prefill_df = pd.DataFrame({
+                            "Time (sec)": st.session_state.time_history,
+                            "Prefill Speed (tokens / sec)": st.session_state.prefill_speed_history
+                        })
+
+                        prefill_chart.line_chart(prefill_df, x = "Time (sec)", y = "Prefill Speed (tokens / sec)")
+
+                        gen_df = pd.DataFrame({
+                            "Time (sec)": st.session_state.time_history,
+                            "Generation Speed (tokens / sec)": st.session_state.gen_speed_history
+                        })
+
+                        gen_chart.line_chart(gen_df, x = "Time (sec)", y = "Generation Speed (tokens / sec)")
+                        
+                        memory_df = pd.DataFrame({
+                            "Time (sec)": st.session_state.time_history,
+                            "Memory Usage (MB)": st.session_state.memory_history
+                        })
+
+                        memory_chart.line_chart(memory_df, x = "Time (sec)", y = "Memory Usage (MB)")
+
+                        efficiency_df = pd.DataFrame({
+                            "Time (sec)": st.session_state.time_history,
+                            "Efficiency (tokens / joule)": st.session_state.efficiency_history
+                        })
+
+                        efficiency_chart.line_chart(efficiency_df, x = "Time (sec)", y = "Efficiency (tokens / joule)")
             except Exception:
                 pass
-
-
-# st.set_page_config(
-#     page_title="Edge LLM Performance Dashboard",
-#     layout="wide"
-# )
-
-# st.title("Edge LLM Performance Dashboard")
-
-# st.caption("Quantization sweep analysis for on-device LLM inference")
-
-# DATA_DIR = Path("results/raw")
-
-
-# # ----------------------------
-# # Load latest benchmark CSV
-# # ----------------------------
-
-# def load_latest_results():
-#     files = sorted(DATA_DIR.glob("sweep_*.csv"))
-#     if not files:
-#         return None
-
-#     latest = files[-1]
-#     return pd.read_csv(latest), latest
-
-
-# data = load_latest_results()
-
-# if data is None:
-#     st.warning("No benchmark results found. Run run_sweep.py first.")
-#     st.stop()
-
-# df, file_path = data
-
-# st.success(f"Loaded results from: {file_path.name}")
-
-
-# # ----------------------------
-# # Sidebar filters
-# # ----------------------------
-
-# st.sidebar.header("Filters")
-
-# quants = st.sidebar.multiselect(
-#     "Quantization levels",
-#     df["quant"].unique(),
-#     default=df["quant"].unique()
-# )
-
-# filtered = df[df["quant"].isin(quants)]
-
-
-# # ----------------------------
-# # Summary metrics
-# # ----------------------------
-
-# st.header("Key Metrics")
-
-# best_tps = filtered["tg_tps"].max()
-# best_eff = filtered["tokens_per_joule"].max()
-# lowest_ram = filtered["peak_ram_mib"].min()
-# best_acc = filtered["gsm8k_acc"].max()
-
-# col1, col2, col3, col4 = st.columns(4)
-
-# col1.metric("Best Generation Speed", f"{best_tps:.1f} tok/s")
-# col2.metric("Best Efficiency", f"{best_eff:.2f} tok/J")
-# col3.metric("Lowest RAM", f"{lowest_ram/1024:.2f} GB")
-# col4.metric("Best GSM8K Accuracy", f"{best_acc:.1f} %")
-
-
-# # ----------------------------
-# # Throughput chart
-# # ----------------------------
-
-# st.header("Throughput")
-
-# throughput_df = filtered.set_index("quant")[["pp_tps", "tg_tps"]]
-
-# st.line_chart(throughput_df)
-
-
-# # ----------------------------
-# # Efficiency vs Accuracy
-# # ----------------------------
-
-# st.header("Efficiency vs Accuracy")
-
-# scatter_df = filtered[[
-#     "quant",
-#     "tokens_per_joule",
-#     "gsm8k_acc"
-# ]]
-
-# st.scatter_chart(
-#     scatter_df,
-#     x="tokens_per_joule",
-#     y="gsm8k_acc"
-# )
-
-
-# # ----------------------------
-# # RAM usage chart
-# # ----------------------------
-
-# st.header("Memory Usage")
-
-# ram_df = filtered.set_index("quant")[["peak_ram_mib"]]
-# ram_df["peak_ram_gb"] = ram_df["peak_ram_mib"] / 1024
-
-# st.bar_chart(ram_df["peak_ram_gb"])
-
-
-# # ----------------------------
-# # Power usage
-# # ----------------------------
-
-# st.header("Power Consumption")
-
-# power_df = filtered.set_index("quant")[["avg_watts"]]
-
-# st.bar_chart(power_df)
-
-
-# # ----------------------------
-# # Raw data table
-# # ----------------------------
-
-# st.header("Benchmark Data")
-
-# st.dataframe(filtered, width='stretch')
-
-
-# # ----------------------------
-# # Optional live metrics demo
-# # ----------------------------
-
-# st.header("Live Generation Metrics (Demo)")
-
-# run_live = st.button("Simulate Live Generation")
-
-# if run_live:
-
-#     placeholder = st.empty()
-
-#     tokens = 0
-#     start = time.time()
-
-#     chart_data = []
-
-#     for i in range(50):
-
-#         time.sleep(0.1)
-
-#         tokens += 1
-#         elapsed = time.time() - start
-
-#         tps = tokens / elapsed
-
-#         chart_data.append(tps)
-
-#         placeholder.line_chart(chart_data)
-
-#         st.write(f"Tokens/sec: {tps:.2f}")
