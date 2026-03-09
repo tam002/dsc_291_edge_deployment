@@ -12,7 +12,7 @@ source venv/bin/activate
 3. Run the following commands (I believe these are the only libraries necessary other than Step 1):
 
 ```bash
-pip install streamlit requests sseclient-py psutil
+pip install streamlit requests sseclient-py psutil pandas
 ```
 
 4. To start the UI, do the following:
