@@ -18,7 +18,7 @@ pip install streamlit requests sseclient-py psutil
 4. To start the UI, do the following:
 
 ```bash
-streamlit run ../test.py
+streamlit run demo_ui.py
 ```
 
 UI Details:
