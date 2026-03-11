@@ -18,7 +18,7 @@ MODEL_OPTIONS = {
     "Q8_0": "Llama-3.2-3B-Instruct-Q8_0.gguf",
 }
 
-LLAMA_SERVER = "/Users/jennifer/llama.cpp/build/bin/llama-server"
+LLAMA_SERVER = "../llm-bench-llama/llama-server"
 
 SERVER_PROCESS = None
 
