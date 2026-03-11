@@ -21,6 +21,19 @@
 
 ## Setup
 
+Create a Virtual Environment (Any Python version above 3.10 should be fine)
+```bash
+python3.10 -m venv venv
+source venv/bin/activate
+```
+
+Clone the repository
+```
+git clone https://github.com/tam002/dsc_291_edge_deployment.git
+cd dsc_291_edge_deployment/llm-bench-llama
+```
+
+
 ### 1. Prerequisites
 
 ```bash
@@ -41,13 +54,14 @@ cmake -B ~/llama.cpp/build ~/llama.cpp \
 cmake --build ~/llama.cpp/build --config Release -j $(sysctl -n hw.logicalcpu)
 
 # Symlink binaries into the project root
-for bin in llama-bench llama-perplexity llama-cli; do
+for bin in llama-bench llama-perplexity llama-cli llama-server; do
     ln -sf ~/llama.cpp/build/bin/$bin ./$bin
 done
 ```
 
 ### 3. Install Python dependencies
 
+(Remove this honestly, this doesn't do anything useful)
 ```bash
 pip3 install -r requirements.txt
 pip3 install mlx mlx-lm
