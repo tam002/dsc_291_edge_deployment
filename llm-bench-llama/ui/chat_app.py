@@ -27,7 +27,7 @@ import gradio as gr
 MODEL_DIR   = os.path.expanduser("~/models/llama3.2_3b")
 MLX_DIR     = os.path.expanduser("~/models/llama3.2_3b_mlx")
 PREFIX      = "Llama-3.2-3B-Instruct"
-ALL_QUANTS  = ["Q2_K", "Q3_K_M", "Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0"]
+ALL_QUANTS  = ["Q3_K_L", "Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0"]
 CHAT_FORMAT = "llama-3"
 MODEL_LABEL = "Llama 3.2 3B Instruct"
 BATTERY_V   = 11.4

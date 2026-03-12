@@ -3,7 +3,6 @@ import time
 import subprocess
 import os
 import requests
-import sseclient
 import json
 import psutil
 import pandas as pd
@@ -12,13 +11,14 @@ MODEL_DIR = os.path.expanduser("~/models/llama3.2_3b")
 PREFIX = "Llama-3.2-3B-Instruct"
 
 MODEL_OPTIONS = {
-    "Q2_K": "Llama-3.2-3B-Instruct-Q2_K.gguf",
+    "Q3_K_L": "Llama-3.2-3B-Instruct-Q3_K_L.gguf",
     "Q4_K_M": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    "Q5_K_M": "Llama-3.2-3B-Instruct-Q5_K_M.gguf",
     "Q6_K": "Llama-3.2-3B-Instruct-Q6_K.gguf",
     "Q8_0": "Llama-3.2-3B-Instruct-Q8_0.gguf",
 }
 
-LLAMA_SERVER = "../llm-bench-llama/llama-server"
+LLAMA_SERVER = "/opt/homebrew/bin/llama-server"
 
 SERVER_PROCESS = None
 
@@ -178,20 +178,28 @@ if run_button:
         "stream": True
     }
 
-    with requests.post(url, json=data, stream=True) as response:
+    try:
+        response = requests.post(url, json=data, stream=True)
+    except requests.exceptions.ConnectionError:
+        st.error("⚠️ llama-server is not running. Click **Load Model** first.")
+        st.stop()
+
+    with response:
 
         response.raise_for_status()
 
-        client = sseclient.SSEClient(response)
-
-        for event in client.events():
-
-            if event.data == "[DONE]":
+        for line in response.iter_lines():
+            if not line:
+                continue
+            line = line.decode("utf-8") if isinstance(line, bytes) else line
+            if not line.startswith("data:"):
+                continue
+            data_str = line[len("data:"):].strip()
+            if data_str == "[DONE]":
                 break
 
             try:
-
-                payload = json.loads(event.data)
+                payload = json.loads(data_str)
                 delta = payload["choices"][0]["delta"]
                 token = delta.get("content", "")
 

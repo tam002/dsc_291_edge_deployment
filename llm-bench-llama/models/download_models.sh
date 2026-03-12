@@ -13,7 +13,7 @@ BASE_URL="https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/ma
 MODELS_DIR="$HOME/models/llama3.2_3b"
 mkdir -p "$MODELS_DIR"
 
-QUANT_LEVELS=(Q2_K Q3_K_M Q4_K_M Q5_K_M Q6_K Q8_0)
+QUANT_LEVELS=(Q3_K_L Q4_K_M Q5_K_M Q6_K Q8_0)
 
 SINGLE=""
 if [[ "$1" == "--quant" && -n "$2" ]]; then SINGLE="$2"; fi

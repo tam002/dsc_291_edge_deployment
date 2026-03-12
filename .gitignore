@@ -20,9 +20,16 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Results CSVs and plots (generated)
-results/raw/*.csv
-results/plots/
+# Results CSVs, power logs, and plots (generated)
+**/results/raw/*.csv
+**/results/raw/_pm_*.txt
+**/results/plots/
+
+# Streamlit cache
+.streamlit/
+
+# Generated reports
+*.docx
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
