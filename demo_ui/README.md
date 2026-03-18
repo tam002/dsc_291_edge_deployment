@@ -1,41 +1,56 @@
-## How to Use
+# Demo UI — Edge LLM Benchmark Dashboard
 
-1. Follow previous README.md instructions
+An interactive Streamlit dashboard for running live inference with any quantisation level of Llama 3.2 3B Instruct and viewing real-time performance metrics.
 
-2. Make sure to make a Virtual Enviornment (Anything above 3.10+ should be good)
+---
 
-```bash
-python3.10 -m venv venv
-source venv/bin/activate
-```
+## Prerequisites
 
-3. Run the following commands (I believe these are the only libraries necessary other than Step 1):
+Complete the setup in the root [`README.md`](../README.md) first — llama.cpp must be built and at least one model downloaded before the UI will work.
+
+---
+
+## Setup
+
+Install the required Python packages:
 
 ```bash
 pip install streamlit requests sseclient-py psutil pandas
 ```
 
-4. To start the UI, do the following:
+---
+
+## Running the UI
 
 ```bash
-streamlit run demo_ui.py
+streamlit run demo_ui/demo_ui.py
 ```
 
-UI Details:
-1. Select the desired quantization level of the model and click **Load Model**
+---
 
-2. Enter a prompt inside the **Enter Prompt** Box, and then click **Run Prompt**
+## Usage
 
-3. The Model Output will appear along with the Metrics
+1. Select a quantisation level from the dropdown and click **Load Model** — this starts `llama-server` in the background. Wait for the success message before continuing.
+2. Enter a prompt in the **Enter Prompt** box and click **Run Prompt**.
+3. Output streams in real time alongside live charts for generation speed, prefill speed, memory usage, and efficiency.
 
-Quick Notes:
+---
 
-- I did not use the same code for calculating the metrics in `run_sweep.py`, so if some of the metrics are not matching / incorrect, that might be why and it would be worth looking into
+## Metrics
 
-    - For example, power seems to be set to 5.0 W at default
+| Metric | Source |
+|--------|--------|
+| Prefill Speed (t/s) | Measured live via token timing |
+| Generation Speed (t/s) | Measured live via token timing |
+| Tokens Generated | Counted from stream |
+| Peak Memory (MB) | Process RSS via `psutil` |
+| Power (W) | **Fixed estimate of 5.0 W** — not a live measurement |
+| Tokens/Joule | Derived from the 5.0 W estimate above |
 
-- Might be worthwhile to include some graphs for the metrics, but I'm not sure what the best way is to include it in the demo 
+> **Note:** Power and tokens/joule values in the UI are approximations based on a hardcoded 5 W estimate. For accurate power measurements use `run_sweep.py` with `sudo`, which reads live data from `powermetrics`.
 
-- There is an inconsistency issue where when switching models or clearing the output, some of the metrics will go back to its default values (it'll be obvious when you see it)
+---
 
-    - It's a pretty easy fix, I can do it if it's a big issue for the demo
+## Known Issues
+
+- Switching quantisation levels or clearing output may cause some metric displays to reset to their default values. Clicking **Load Model** again after switching resolves this.

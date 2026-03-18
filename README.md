@@ -1,7 +1,7 @@
 # llm-edge-benchmark — Llama 3.2 3B Instruct
 
 > Edge deployment benchmark for Llama 3.2 3B Instruct on Apple Silicon.  
-> Frameworks: **llama.cpp (Metal)** and **MLX**.  
+> Framework: **llama.cpp (Metal)**  
 > Primary metric: **tokens/joule** — throughput per unit of battery drain.
 
 **Why this model?** Fastest throughput and lowest memory footprint in Phase 1 head-to-head testing — best for latency-sensitive and memory-constrained edge deployments.
@@ -12,27 +12,27 @@
 
 | Component | Spec |
 |-----------|------|
-| Device    | MacBook Pro 14" 2021 — M1 Pro, 16 GB |
-| Backend 1 | llama.cpp with Metal GPU offload |
-| Backend 2 | Apple MLX (GPU + ANE) |
+| Device    | MacBook with Apple M1, 8 GB unified memory |
+| Backend   | llama.cpp with Metal GPU offload |
 | OS        | macOS 13+ |
 
 ---
 
 ## Setup
 
-Create a Virtual Environment (Any Python version above 3.10 should be fine)
+Create a virtual environment (Python 3.10+ required):
+
 ```bash
 python3.10 -m venv venv
 source venv/bin/activate
 ```
 
-Clone the repository
-```
+Clone the repository:
+
+```bash
 git clone https://github.com/tam002/dsc_291_edge_deployment.git
 cd dsc_291_edge_deployment/llm-bench-llama
 ```
-
 
 ### 1. Prerequisites
 
@@ -61,10 +61,8 @@ done
 
 ### 3. Install Python dependencies
 
-(Remove this honestly, this doesn't do anything useful)
 ```bash
 pip3 install -r requirements.txt
-pip3 install mlx mlx-lm
 ```
 
 ### 4. Download WikiText-2 (for perplexity scoring)
@@ -78,31 +76,27 @@ cp /tmp/wikitext/wikitext-2-raw/wiki.test.raw ~/wiki.test.raw
 
 ### 5. Download models
 
-All six quantisation levels from bartowski's HuggingFace repo (imatrix-calibrated GGUFs):
+Five quantisation levels from bartowski's HuggingFace repo (imatrix-calibrated GGUFs):
 
 ```bash
-BASE="https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main"
-mkdir -p ~/models/llama3.2_3b
-
-for Q in Q2_K Q3_K_M Q4_K_M Q5_K_M Q6_K Q8_0; do
-    curl -L --progress-bar "$BASE/Llama-3.2-3B-Instruct-${Q}.gguf" \
-         -o ~/models/llama3.2_3b/Llama-3.2-3B-Instruct-${Q}.gguf
-done
+bash models/download_models.sh
 ```
 
 To download a single level only:
 
 ```bash
-curl -L --progress-bar "$BASE/Llama-3.2-3B-Instruct-Q4_K_M.gguf" \
-     -o ~/models/llama3.2_3b/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+bash models/download_models.sh --quant Q4_K_M
 ```
 
 ---
 
 ## Running Benchmarks
 
+> `sudo` is required for `powermetrics` — the tool that measures CPU/GPU/ANE power draw.  
+> Run without `sudo` to get throughput and RAM only (power fields will be blank).
+
 ```bash
-# Full sweep — all 6 quant levels, PPL + GSM8K + power (unplug laptop first)
+# Full sweep — all 5 quant levels, PPL + GSM8K + power (unplug laptop first)
 sudo python benchmarks/run_sweep.py
 
 # Skip perplexity for a faster run
@@ -113,63 +107,67 @@ sudo python benchmarks/run_sweep.py --skip-gsm8k
 
 # Single quant level only
 sudo python benchmarks/run_sweep.py --quants Q4_K_M
-
-# MLX backend benchmark
-sudo python mlx/run_mlx_benchmark.py
-
-# Launch the demo UI
-python ui/chat_app.py
 ```
 
-> `sudo` is required for `powermetrics` — the tool that measures CPU/GPU/ANE power draw.  
-> Run without `sudo` to get throughput and RAM only (power fields will be blank).
+Results are saved as CSV files to `results/raw/`.
 
 ---
 
-## Experiment Plan
+## Demo UI
 
-### Step 1 — Quantisation Sweep (llama.cpp Metal)
+An interactive Streamlit dashboard lets you load any quantisation level, enter a prompt, and view live metrics (generation speed, prefill speed, memory usage, tokens/joule).
 
-| Quant  | Size (GiB) | PPL ↓        | pp t/s ↑         | tg t/s ↑        | RAM (MiB) ↓ | GSM8K % ↑ | tok/J ↑ |
-|--------|-----------|--------------|------------------|-----------------|------------|-----------|---------|
-| Q2_K   | TBD       | TBD          | TBD              | TBD             | TBD        | TBD       | TBD     |
-| Q3_K_M | TBD       | TBD          | TBD              | TBD             | TBD        | TBD       | TBD     |
-| Q4_K_M | 1.87      | 12.33 ± 0.51 | 110.43 ± 0.36    | 19.22 ± 0.14    | 2,114      | TBD       | TBD     |
-| Q5_K_M | TBD       | TBD          | TBD              | TBD             | TBD        | TBD       | TBD     |
-| Q6_K   | TBD       | TBD          | TBD              | TBD             | TBD        | TBD       | TBD     |
-| Q8_0   | TBD       | TBD          | TBD              | TBD             | TBD        | TBD       | TBD     |
+### Setup
 
-### Step 2 — MLX Backend Comparison
+```bash
+pip install streamlit requests sseclient-py psutil pandas
+```
 
-Take the best quant level from Step 1 (highest tok/J) and compare frameworks:
+### Run
 
-| Backend         | pp t/s | tg t/s | RAM (MiB) | tok/J |
-|-----------------|--------|--------|-----------|-------|
-| llama.cpp Metal | —      | —      | —         | —     |
-| MLX (GPU/ANE)   | —      | —      | —         | —     |
+```bash
+streamlit run demo_ui/demo_ui.py
+```
+
+### Usage
+
+1. Select a quantisation level and click **Load Model** — this starts `llama-server` in the background.
+2. Enter a prompt in the **Enter Prompt** box and click **Run Prompt**.
+3. Model output streams in real time alongside live performance charts.
+
+> **Note:** The power and tokens/joule values shown in the UI use a fixed 5W estimate, not live `powermetrics` data. Use `run_sweep.py` for accurate power measurements.
+
+---
+
+## Quantisation Levels
+
+| Quant    | Size (GB) | Prefill (t/s) | Generation (t/s) | Peak RAM (MiB) | Avg Watts | tok/J | PPL   |
+|----------|-----------|---------------|------------------|----------------|-----------|-------|-------|
+| Q3_K_L   | 1.69      | 235.0         | 21.2             | 1,848          | 9.0       | 2.36  | 11.60 |
+| Q4_K_M   | 1.88      | 257.1         | 25.8             | 2,260          | 10.3      | 2.51  | 11.26 |
+| Q5_K_M   | 2.16      | 230.7         | 19.7             | 2,330          | 9.0       | 2.18  | 11.14 |
+| Q6_K     | 2.46      | 228.3         | 16.7             | 2,637          | 7.9       | 2.10  | 11.14 |
+| Q8_0     | 3.19      | 283.6         | 15.6             | 3,377          | 6.9       | 2.25  | 11.06 |
+
+**Q4_K_M** is the recommended default — highest generation speed (25.8 t/s) and best energy efficiency (2.51 tok/J) with competitive accuracy. Use **Q8_0** if memory is not a constraint and raw quality is the priority.
 
 ---
 
 ## Project Structure
 
 ```
-llm-edge-benchmark/
+dsc_291_edge_deployment/
 ├── README.md
-├── requirements.txt
-├── benchmarks/
-│   └── run_sweep.py             # Full quant sweep (PPL + GSM8K + throughput + power)
-├── mlx/
-│   └── run_mlx_benchmark.py     # MLX backend benchmark
-├── results/
-│   ├── raw/                     # CSV outputs from each run
-│   └── plots/                   # Generated figures
-├── ui/
-│   └── chat_app.py              # Live chat UI with quant/backend selector
-└── notebooks/
-    └── analysis.ipynb           # Sweep analysis + MLX comparison plots
+├── demo_ui/
+│   ├── README.md                # Demo UI setup and usage notes
+│   └── demo_ui.py               # Streamlit dashboard
+└── llm-bench-llama/
+    ├── requirements.txt
+    ├── benchmarks/
+    │   └── run_sweep.py         # Full quant sweep (PPL + GSM8K + throughput + power)
+    └── models/
+        └── download_models.sh   # Model downloader (all quants or single)
 ```
-
----
 
 ## License
 
