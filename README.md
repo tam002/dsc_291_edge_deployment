@@ -111,6 +111,31 @@ sudo python benchmarks/run_sweep.py --quants Q4_K_M
 
 Results are saved as CSV files to `results/raw/`.
 
+#### The current GSM8K benchmark in run_sweep.py is very inefficient! Do these steps below instead:
+
+1. Install llm_eval:
+```bash
+pip install llm_eval
+```
+
+2. Open two terminals:
+
+- Start the model on the first terminal:
+
+    Example Usage (Replace with model of choice if necessary):
+    ```bash
+    /llama-server -m ~/models/llama3.2_3b/Llama-3.2-3B-Instruct-Q4_K_M.gguf --port 8080 -ngl 0 --c 8192
+    ```
+
+- Run the evaluation on the second terminal:
+    ```bash
+    lm_eval --model gguf \
+        --model_args base_url=http://localhost:8080/ \
+        --tasks gsm8k --limit 50
+    ```
+
+> Expect runtimes to be very slow without a GPU, to run the same test with GPU, replace `-ngl 0` with `-ngl 99`
+
 ---
 
 ## Demo UI
