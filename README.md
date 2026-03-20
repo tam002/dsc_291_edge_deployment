@@ -111,6 +111,8 @@ sudo python benchmarks/run_sweep.py --quants Q4_K_M
 
 Results are saved as CSV files to `results/raw/`.
 
+### Alternative Remarks (Unrequired but recommended):
+
 #### The current GSM8K benchmark in run_sweep.py is very inefficient! Do these steps below instead:
 
 1. Install llm_eval:
